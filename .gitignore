@@ -1,0 +1,3 @@
+*.py[co]
+[.][v]env/
+__pycache__
