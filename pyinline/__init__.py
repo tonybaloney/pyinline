@@ -46,11 +46,34 @@ class InlineTransformer(cst.CSTTransformer):
             for f in self.inline_functions
             if get_full_name_for_node(f) == get_full_name_for_node(original_node)
         ]
-        if match:
-            log.debug(
-                f"Replacing function call to {get_full_name_for_node(original_node)}"
-            )
-            if isinstance(match[0].body, cst.IndentedBlock):
-                if len(match[0].body.body) == 1:
-                    return match[0].body.body[0]
-        return updated_node
+        if not match:
+            return updated_node
+
+        match = match[0]
+        log.debug(f"Replacing function call to {get_full_name_for_node(original_node)}")
+        # IF the inline function has no arguments and is just a single-line, return as a SimpleStatement.
+        if (
+            isinstance(match.body, cst.IndentedBlock)
+            and len(match.body.body) == 1
+            and not original_node.args
+        ):
+            return match.body.body[0]
+
+        # Otherwise build a suite
+        suite = cst.SimpleStatementSuite(body=[])
+
+        # resolve arguments
+        if original_node.args:
+            for i, arg in enumerate(original_node.args):
+                if not arg.keyword:
+                    suite.body.append(
+                        cst.Assign(
+                            [cst.AssignTarget(match.params.params[i].name)],
+                            original_node.args[i].value,
+                        )
+                    )
+
+        suite.body.extend(
+            [fragment for statement in match.body.body for fragment in statement.body]
+        )
+        return suite
