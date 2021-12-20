@@ -1,8 +1,15 @@
 import libcst as cst
-from typing import Optional, List, Tuple, Union
+from typing import Optional, List, Union
 from functools import wraps
 from libcst.helpers import get_full_name_for_node
 import logging
+from dataclasses import dataclass
+from typing import Optional, Sequence, Union
+from libcst._nodes.internal import (
+    CodegenState,
+    visit_sequence,
+)
+from libcst._add_slots import add_slots
 
 log = logging.getLogger(__name__)
 
@@ -14,6 +21,30 @@ def inline():
 
 MODULE_NAME = "pyinline"
 DECORATOR_NAME = "inline"
+
+
+@add_slots
+@dataclass(frozen=True)
+class InlineBlock(cst.BaseSuite):
+    body: Sequence[cst.BaseStatement]
+
+    #: Any optional trailing comment and the final ``NEWLINE`` at the end of the line.
+    header: cst.TrailingWhitespace = cst.TrailingWhitespace.field()
+
+    def _visit_and_replace_children(self, visitor: cst.CSTVisitorT) -> "InlineBlock":
+        return InlineBlock(
+            body=visit_sequence(self, "body", self.body, visitor), header=self.header
+        )
+
+    def _codegen_impl(self, state: CodegenState) -> None:
+        self.header._codegen(state)
+
+        if self.body:
+            with state.record_syntactic_position(
+                self, start_node=self.body[0], end_node=self.body[-1]
+            ):
+                for stmt in self.body:
+                    stmt._codegen(state)
 
 
 class AssignedNamesVisitor(cst.CSTVisitor):
@@ -32,6 +63,12 @@ class NameManglerTransformer(cst.CSTTransformer):
     def __init__(self, prefix: str, to_mangle=List[str]) -> None:
         self.prefix = prefix
         self.to_mangle = to_mangle
+
+    def visit_Name(self, node: cst.Name) -> Optional[bool]:
+        if node.value == self.prefix:
+            raise ValueError("Inline functions cannot be recursive")
+
+        return super().visit_Name(node)
 
     def leave_Name(
         self, original_node: cst.Name, updated_node: cst.Name
@@ -139,13 +176,18 @@ class InlineTransformer(cst.CSTTransformer):
         ):
             return match.body.body[0]
 
-        # Otherwise build a suite
-        suite = cst.SimpleStatementSuite(
-            body=[
-                fragment for statement in match.body.body for fragment in statement.body
-            ],
-            leading_whitespace=cst.SimpleWhitespace(""),
-        )
+        # IF the function has no nesting, use a simple Statement suite
+        if all(isinstance(line, cst.SimpleStatementLine) for line in match.body.body):
+            suite = cst.SimpleStatementSuite(
+                body=[
+                    fragment
+                    for statement in match.body.body
+                    for fragment in statement.body
+                ],
+                leading_whitespace=cst.SimpleWhitespace(""),  # TODO: Work out indent
+            )
+        else:
+            suite = InlineBlock(body=match.body.body)  # TODO: Work out indent
 
         # Mangle names
         mangledNamesVisitor = AssignedNamesVisitor()
@@ -161,7 +203,11 @@ class InlineTransformer(cst.CSTTransformer):
                 # Is this a constant?
                 if isinstance(
                     original_node.args[i].value,
-                    (cst.SimpleString, cst.Integer, cst.Float),
+                    (
+                        cst.SimpleString,
+                        cst.Integer,
+                        cst.Float,
+                    ),  # TODO: Other useful constants
                 ):
                     # Replace names with constant value in functions
                     transformer = NameToConstantTransformer(
