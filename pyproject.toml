@@ -4,10 +4,10 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "pyinline"
-authors = [{name = "Anthony Shaw", email = "anthonyshaw@apache.org"}]
+authors = [{name = "Anthony Shaw"}]
 classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
-requires = ["libcst"]
+dependencies = ["libcst >= 0.3.23,<0.4"]
 
 [project.urls]
 Home = "https://github.com/tonybaloney/pyinline"

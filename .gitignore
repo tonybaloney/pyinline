@@ -1,3 +1,4 @@
 *.py[co]
 [.][v]env/
 __pycache__
+dist/
