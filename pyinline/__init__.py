@@ -1,3 +1,16 @@
+"""
+pyinline, a script for inlining functions that have been decorated with the `@inline` decorator.
+
+Usage:
+
+    @inline
+    def my_helpful_function(arg):
+        # do_things..
+
+    my_helpful_function(1)
+
+"""
+
 import libcst as cst
 from typing import Optional, List, Union
 from functools import wraps
@@ -10,6 +23,8 @@ from libcst._nodes.internal import (
     visit_sequence,
 )
 from libcst._add_slots import add_slots
+
+__version__ = "0.0.1"
 
 log = logging.getLogger(__name__)
 
