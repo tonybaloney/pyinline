@@ -16,6 +16,34 @@ MODULE_NAME = "pyinline"
 DECORATOR_NAME = "inline"
 
 
+class AssignedNamesVisitor(cst.CSTVisitor):
+    def __init__(self) -> None:
+        self._to_mangle = []
+
+    def leave_Assign(self, original_node: cst.Assign):
+        self._to_mangle.extend(target.target.value for target in original_node.targets)
+
+    @property
+    def names_to_mangle(self):
+        return self._to_mangle
+
+
+class NameManglerTransformer(cst.CSTTransformer):
+    def __init__(self, prefix: str, to_mangle=List[str]) -> None:
+        self.prefix = prefix
+        self.to_mangle = to_mangle
+
+    def leave_Name(
+        self, original_node: cst.Name, updated_node: cst.Name
+    ) -> cst.BaseExpression:
+        if original_node.value in self.to_mangle:
+            return original_node.with_changes(
+                value=f"_{self.prefix}__{original_node.value}"
+            )
+        else:
+            return original_node
+
+
 class NameToConstantTransformer(cst.CSTTransformer):
     def __init__(self, name: cst.Name, constant: cst.CSTNode) -> None:
         self.name = name
@@ -45,7 +73,6 @@ class NameToNameTransformer(cst.CSTTransformer):
 class InlineTransformer(cst.CSTTransformer):
     def __init__(self) -> None:
         self.inline_functions: List[cst.FunctionDef] = []
-        self.stack: List[Tuple[str, ...]] = []
         super().__init__()
 
     def visit_FunctionDef(self, node: cst.FunctionDef) -> Optional[bool]:
@@ -65,7 +92,7 @@ class InlineTransformer(cst.CSTTransformer):
     ]:
         if original_node in self.inline_functions:
             return cst.RemovalSentinel.REMOVE
-        return super().leave_FunctionDef(original_node, updated_node)
+        return original_node
 
     def leave_ImportFrom(
         self, original_node: cst.ImportFrom, updated_node: cst.ImportFrom
@@ -88,7 +115,6 @@ class InlineTransformer(cst.CSTTransformer):
             if get_full_name_for_node(f) == get_full_name_for_node(node)
         ]
         if match:
-            self.stack.append(get_full_name_for_node(match[0]))
             return False
         return super().visit_Call(node)
 
@@ -121,9 +147,16 @@ class InlineTransformer(cst.CSTTransformer):
             leading_whitespace=cst.SimpleWhitespace(""),
         )
 
+        # Mangle names
+        mangledNamesVisitor = AssignedNamesVisitor()
+        suite.visit(mangledNamesVisitor)
+        transformer = NameManglerTransformer(
+            get_full_name_for_node(original_node), mangledNamesVisitor.names_to_mangle
+        )
+        suite = suite.visit(transformer)
+
         # resolve arguments
         if original_node.args:
-
             for i, arg in enumerate(original_node.args):
                 # Is this a constant?
                 if isinstance(
@@ -135,13 +168,11 @@ class InlineTransformer(cst.CSTTransformer):
                         match.params.params[i].name, arg.value
                     )
                     suite = suite.visit(transformer)
-                    continue
                 else:
                     # Replace names with constant value in functions
                     transformer = NameToNameTransformer(
                         match.params.params[i].name, arg.value
                     )
                     suite = suite.visit(transformer)
-                    continue
 
         return suite
