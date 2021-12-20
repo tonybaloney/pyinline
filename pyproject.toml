@@ -8,6 +8,8 @@ authors = [{name = "Anthony Shaw"}]
 classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
 dependencies = ["libcst >= 0.3.23,<0.4"]
+readme = "README.md"
+requires-python = ">=3.8"
 
 [project.urls]
 Home = "https://github.com/tonybaloney/pyinline"

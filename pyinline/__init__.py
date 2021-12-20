@@ -24,7 +24,7 @@ from libcst._nodes.internal import (
 )
 from libcst._add_slots import add_slots
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 log = logging.getLogger(__name__)
 
