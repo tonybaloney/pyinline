@@ -12,6 +12,36 @@ def inline():
     pass
 
 
+MODULE_NAME = "pyinline"
+DECORATOR_NAME = "inline"
+
+
+class NameToConstantTransformer(cst.CSTTransformer):
+    def __init__(self, name: cst.Name, constant: cst.CSTNode) -> None:
+        self.name = name
+        self.constant = constant
+
+    def leave_Name(
+        self, original_node: cst.Name, updated_node: cst.Name
+    ) -> cst.BaseExpression:
+        if original_node.deep_equals(self.name):
+            return self.constant
+        return original_node
+
+
+class NameToNameTransformer(cst.CSTTransformer):
+    def __init__(self, name: cst.Name, replacement_name: cst.Name) -> None:
+        self.name = name
+        self.replacement_name = replacement_name
+
+    def leave_Name(
+        self, original_node: cst.Name, updated_node: cst.Name
+    ) -> cst.BaseExpression:
+        if original_node.deep_equals(self.name):
+            return self.replacement_name
+        return original_node
+
+
 class InlineTransformer(cst.CSTTransformer):
     def __init__(self) -> None:
         self.inline_functions: List[cst.FunctionDef] = []
@@ -21,11 +51,35 @@ class InlineTransformer(cst.CSTTransformer):
     def visit_FunctionDef(self, node: cst.FunctionDef) -> Optional[bool]:
         if node.decorators:
             is_inline = any(
-                decorator.decorator.value == "inline" for decorator in node.decorators
+                get_full_name_for_node(decorator.decorator) == DECORATOR_NAME
+                for decorator in node.decorators
             )
             if is_inline:
                 self.inline_functions.append(node)
         return super().visit_FunctionDef(node)
+
+    def leave_FunctionDef(
+        self, original_node: cst.FunctionDef, updated_node: cst.FunctionDef
+    ) -> Union[
+        cst.BaseStatement, cst.FlattenSentinel[cst.BaseStatement], cst.RemovalSentinel
+    ]:
+        if original_node in self.inline_functions:
+            return cst.RemovalSentinel.REMOVE
+        return super().leave_FunctionDef(original_node, updated_node)
+
+    def leave_ImportFrom(
+        self, original_node: cst.ImportFrom, updated_node: cst.ImportFrom
+    ) -> Union[
+        cst.BaseSmallStatement,
+        cst.FlattenSentinel[cst.BaseSmallStatement],
+        cst.RemovalSentinel,
+    ]:
+        if (
+            original_node.module.value == MODULE_NAME
+            and original_node.names[0].name.value == DECORATOR_NAME
+        ):
+            return cst.RemovalSentinel.REMOVE
+        return super().leave_ImportFrom(original_node, updated_node)
 
     def visit_Call(self, node: cst.Call) -> Optional[bool]:
         match = [
@@ -60,20 +114,34 @@ class InlineTransformer(cst.CSTTransformer):
             return match.body.body[0]
 
         # Otherwise build a suite
-        suite = cst.SimpleStatementSuite(body=[])
+        suite = cst.SimpleStatementSuite(
+            body=[
+                fragment for statement in match.body.body for fragment in statement.body
+            ],
+            leading_whitespace=cst.SimpleWhitespace(""),
+        )
 
         # resolve arguments
         if original_node.args:
-            for i, arg in enumerate(original_node.args):
-                if not arg.keyword:
-                    suite.body.append(
-                        cst.Assign(
-                            [cst.AssignTarget(match.params.params[i].name)],
-                            original_node.args[i].value,
-                        )
-                    )
 
-        suite.body.extend(
-            [fragment for statement in match.body.body for fragment in statement.body]
-        )
+            for i, arg in enumerate(original_node.args):
+                # Is this a constant?
+                if isinstance(
+                    original_node.args[i].value,
+                    (cst.SimpleString, cst.Integer, cst.Float),
+                ):
+                    # Replace names with constant value in functions
+                    transformer = NameToConstantTransformer(
+                        match.params.params[i].name, arg.value
+                    )
+                    suite = suite.visit(transformer)
+                    continue
+                else:
+                    # Replace names with constant value in functions
+                    transformer = NameToNameTransformer(
+                        match.params.params[i].name, arg.value
+                    )
+                    suite = suite.visit(transformer)
+                    continue
+
         return suite
